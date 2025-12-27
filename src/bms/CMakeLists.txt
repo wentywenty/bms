@@ -1,66 +1,41 @@
 cmake_minimum_required(VERSION 3.8)
-project(inference)
+project(bms)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native")
-set(CMAKE_CXX_COMPILER_LAUNCHER ccache)
-
-set(THREADS_PREFER_PTHREAD_FLAG ON)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(CMAKE_BUILD_TYPE Release)
-
-add_definitions(-DROOT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/\")
-
-find_package(ament_cmake REQUIRED)
-find_package(rclcpp REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
-find_package(Boost COMPONENTS system)
-find_package(Eigen3 REQUIRED)
-
-if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
-set(ONNXRUNTIME_ROOT_DIR ${CMAKE_SOURCE_DIR}/thirdparty/onnxruntime-linux-x64-1.21.0)
-set(CNPY_ROOT_DIR ${CMAKE_SOURCE_DIR}/thirdparty/cnpy-linux-x64)
-elseif(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
-set(ONNXRUNTIME_ROOT_DIR ${CMAKE_SOURCE_DIR}/thirdparty/onnxruntime-linux-aarch64-1.21.0)
-set(CNPY_ROOT_DIR ${CMAKE_SOURCE_DIR}/thirdparty/cnpy-linux-aarch64)
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
 endif()
 
-set(ONNXRUNTIME_INCLUDE_DIR ${ONNXRUNTIME_ROOT_DIR}/include)
-set(ONNXRUNTIME_LIB_DIR ${ONNXRUNTIME_ROOT_DIR}/lib)
+# 1. 查找依赖，增加 rclcpp_components
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED) # 新增
+find_package(sensor_msgs REQUIRED)
 
-set(CNPY_INCLUDE_DIR ${CNPY_ROOT_DIR}/include)
-set(CNPY_LIB_DIR ${CNPY_ROOT_DIR}/lib)
+include_directories(include)
 
-set(PUBLIC_DEPENDENCIES
-    ${Boost_LIBRARIES} pthread Eigen3::Eigen)
+# 2. 生成共享库 (Shared Library)，这是组件的核心
+# 我们把 src/bms.cpp 编译成库，供组件容器加载
+add_library(bms_component SHARED src/bms.cpp)
+target_compile_definitions(bms_component PRIVATE "BMS_COMPONENT_BUILD")
+ament_target_dependencies(bms_component rclcpp rclcpp_components sensor_msgs)
 
-add_executable(${PROJECT_NAME}_node src/inference_node.cpp src/motion_loader.cpp)
-target_include_directories(${PROJECT_NAME}_node
-  PUBLIC 
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
-  $<INSTALL_INTERFACE:include>
-  ${ONNXRUNTIME_INCLUDE_DIR}
-  ${CNPY_INCLUDE_DIR}
+# 3. 注册组件 (这一步会生成插件索引)
+rclcpp_components_register_nodes(bms_component "TwsBmsNode")
+
+# 4. 生成独立可执行文件 (Standalone Executable)
+# 这样你依然可以用 ros2 run bms bms_node 启动
+add_executable(bms_node src/bms.cpp)
+ament_target_dependencies(bms_node rclcpp rclcpp_components sensor_msgs)
+
+# 5. 安装规则
+install(TARGETS bms_component bms_node
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
-target_link_libraries(${PROJECT_NAME}_node PUBLIC ${PUBLIC_DEPENDENCIES} ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so ${CNPY_LIB_DIR}/libcnpy.so)
-ament_target_dependencies(${PROJECT_NAME}_node PUBLIC rclcpp sensor_msgs geometry_msgs)
-set_target_properties(${PROJECT_NAME}_node PROPERTIES
-    BUILD_WITH_INSTALL_RPATH TRUE
-    INSTALL_RPATH "${CMAKE_INSTALL_PREFIX}/lib" 
-)
 
-install(TARGETS ${PROJECT_NAME}_node
-  RUNTIME DESTINATION lib/${PROJECT_NAME})
-install(DIRECTORY launch 
-  DESTINATION share/${PROJECT_NAME})
-install(DIRECTORY config
+install(DIRECTORY launch config
   DESTINATION share/${PROJECT_NAME}
 )
-install(FILES ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so.1 ${ONNXRUNTIME_LIB_DIR}/libonnxruntime.so.1.21.0 ${CNPY_LIB_DIR}/libcnpy.so
-        DESTINATION lib)
 
-ament_export_dependencies(rclcpp sensor_msgs geometry_msgs)
-ament_export_libraries(${PROJECT_NAME})
 ament_package()
