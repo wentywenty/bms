@@ -14,7 +14,9 @@
 
 class TwsBmsNode : public rclcpp::Node {
 public:
-    TwsBmsNode() : Node("bms_node"), serial_fd_(-1) {
+    // 修改构造函数，接受 NodeOptions 参数
+    explicit TwsBmsNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions())
+        : Node("bms_node", options), serial_fd_(-1) {
         // Parameters
         this->declare_parameter("port_name", "/dev/ttyUSB0");
         this->declare_parameter("baud_rate", 115200);
@@ -71,7 +73,7 @@ private:
         cfsetispeed(&options, baud);
         cfsetospeed(&options, baud);
 
-        // 8N1 [cite: 29-31]
+        // 8N1
         options.c_cflag &= ~PARENB; // No parity
         options.c_cflag &= ~CSTOPB; // 1 stop bit
         options.c_cflag &= ~CSIZE;
@@ -82,11 +84,11 @@ private:
         options.c_oflag &= ~OPOST; // Raw output
 
         tcsetattr(serial_fd_, TCSANOW, &options);
-        fcntl(serial_fd_, F_SETFL, 0); // Blocking read (with timeout via select later if needed)
+        fcntl(serial_fd_, F_SETFL, 0); // Blocking read
         return true;
     }
 
-    // CRC16 Calculation (Modbus) [cite: 215]
+    // CRC16 Calculation (Modbus)
     uint16_t calculate_crc(const uint8_t *data, size_t len) {
         uint16_t crc = 0xFFFF;
         for (size_t i = 0; i < len; i++) {
@@ -104,14 +106,14 @@ private:
         uint8_t frame[8];
         frame[0] = BMS_ADDR;
         frame[1] = FUNC_READ;
-        frame[2] = (start_addr >> 8) & 0xFF; // High byte first for address [cite: 48]
+        frame[2] = (start_addr >> 8) & 0xFF;
         frame[3] = start_addr & 0xFF;
         frame[4] = (num_regs >> 8) & 0xFF;
         frame[5] = num_regs & 0xFF;
         
         uint16_t crc = calculate_crc(frame, 6);
-        frame[6] = crc & 0xFF;        // CRC Low [cite: 239]
-        frame[7] = (crc >> 8) & 0xFF; // CRC High
+        frame[6] = crc & 0xFF;
+        frame[7] = (crc >> 8) & 0xFF;
 
         write(serial_fd_, frame, 8);
     }
@@ -122,14 +124,14 @@ private:
         
         buffer.resize(expected_bytes);
         int total_read = 0;
-        int max_retries = 5; // Simple timeout mechanism
+        int max_retries = 5;
         
         while (total_read < expected_bytes && max_retries > 0) {
             int n = read(serial_fd_, buffer.data() + total_read, expected_bytes - total_read);
             if (n > 0) {
                 total_read += n;
             } else {
-                usleep(10000); // Wait 10ms
+                usleep(10000);
                 max_retries--;
             }
         }
@@ -143,19 +145,14 @@ private:
         return (received_crc == calc_crc);
     }
 
-    // Helper: Extract 16-bit value (Little Endian from Data Payload) 
-    // Data comes as: [ByteL, ByteH]
     uint16_t get_u16(const std::vector<uint8_t>& buf, int offset) {
         return buf[offset] | (buf[offset+1] << 8);
     }
 
-    // Helper: Extract 32-bit value (Little Endian)
-    // Data comes as: [Byte0, Byte1, Byte2, Byte3]
     uint32_t get_u32(const std::vector<uint8_t>& buf, int offset) {
         return buf[offset] | (buf[offset+1] << 8) | (buf[offset+2] << 16) | (buf[offset+3] << 24);
     }
 
-    // Helper: Extract 32-bit signed value (Little Endian)
     int32_t get_i32(const std::vector<uint8_t>& buf, int offset) {
         uint32_t val = get_u32(buf, offset);
         return static_cast<int32_t>(val);
@@ -163,7 +160,7 @@ private:
 
     void timer_callback() {
         if (serial_fd_ < 0) {
-            if (!open_serial()) return; // Try reconnect
+            if (!open_serial()) return;
         }
 
         sensor_msgs::msg::BatteryState msg;
@@ -171,38 +168,25 @@ private:
         msg.header.frame_id = frame_id_;
         msg.present = true;
 
-        // --- STEP 1: Read Status Block (0x9000 - 0x900C) ---
-        // We read 15 registers (30 bytes data + 5 bytes overhead = 35 bytes)
-        // Regs: 9000(WorkState), 9002(Volt), 9004(Curr), 9006-7(CellV), 9008-B(Temp), 900C(Protect)
         send_request(0x9000, 15);
         std::vector<uint8_t> buf1;
-        // Expected: 1(Addr)+1(Func)+1(Len)+30(Data)+2(CRC) = 35
         if (read_response(buf1, 35)) {
-            // Byte index in data payload starts at 3
-            // 0x9000 Work State (2 Bytes) @ idx 3
             uint16_t work_state = get_u16(buf1, 3);
             
-            // 0x9002 Voltage (4 Bytes) @ idx 5 -> mV
             uint32_t volt_mv = get_u32(buf1, 5);
-            msg.voltage = volt_mv / 1000.0; // mV -> V [cite: 139]
+            msg.voltage = volt_mv / 1000.0;
 
-            // 0x9004 Current (4 Bytes) @ idx 9 -> mA
             int32_t curr_ma = get_i32(buf1, 9);
-            msg.current = curr_ma / 1000.0; // mA -> A [cite: 139]
+            msg.current = curr_ma / 1000.0;
 
-            // 0x9008 Max Cell Temp (2 Bytes) @ idx 17
-            // "66 means 66-40=26 C" [cite: 139]
             uint16_t temp_raw = get_u16(buf1, 17);
             msg.temperature = temp_raw - 40.0;
 
-            // 0x900C Protect Status (4 Bytes) @ idx 25
             uint32_t protect_status = get_u32(buf1, 25);
             
-            // Map Status
             if (protect_status != 0) {
                  msg.power_supply_health = sensor_msgs::msg::BatteryState::POWER_SUPPLY_HEALTH_UNSPEC_FAILURE;
-                 // Can refine based on bits (Overheat, Overvolt, etc.)
-                 if (protect_status & (0x00000008 | 0x00000010)) // Charge Over Temp [cite: 156]
+                 if (protect_status & (0x00000008 | 0x00000010))
                     msg.power_supply_health = sensor_msgs::msg::BatteryState::POWER_SUPPLY_HEALTH_OVERHEAT;
             } else {
                  msg.power_supply_health = sensor_msgs::msg::BatteryState::POWER_SUPPLY_HEALTH_GOOD;
@@ -215,25 +199,19 @@ private:
             }
         } else {
             RCLCPP_WARN(this->get_logger(), "Read Status Block Failed (CRC or Timeout)");
-            return; // Don't publish partial data
+            return;
         }
 
-        // --- STEP 2: Read Capacity Block (0x9028 - 0x902A) ---
-        // We read 4 registers (0x9028 SOC, 0x9029 SOH, 0x902A Capacity)
-        // Regs: 9028(1), 9029(1), 902A(2) -> Total 4 regs = 8 bytes data
-        usleep(20000); // Brief pause between commands
+        usleep(20000);
         send_request(0x9028, 4);
         std::vector<uint8_t> buf2;
-        // Expected: 1+1+1+8+2 = 13 bytes
         if (read_response(buf2, 13)) {
-             // 0x9028 SOC (2 Bytes) @ idx 3
              uint16_t soc = get_u16(buf2, 3);
-             msg.percentage = soc / 100.0; // 0-100 -> 0.0-1.0 [cite: 139]
+             msg.percentage = soc / 100.0;
 
-             // 0x902A Capacity (4 Bytes) @ idx 7
              uint32_t cap_mah = get_u32(buf2, 7);
-             msg.capacity = cap_mah / 1000.0; // mAh -> Ah
-             msg.design_capacity = std::numeric_limits<float>::quiet_NaN(); // Unknown from protocol
+             msg.capacity = cap_mah / 1000.0;
+             msg.design_capacity = std::numeric_limits<float>::quiet_NaN();
         } else {
              RCLCPP_WARN(this->get_logger(), "Read Capacity Block Failed");
         }
