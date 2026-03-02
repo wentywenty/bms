@@ -1,7 +1,14 @@
 bms_node:
   ros__parameters:
-    port_name: "/dev/ttyUSB0"  # 你的串口设备号，根据实际情况修改
-    baud_rate: 115200          # 协议文档规定默认波特率 [cite: 28]
-    poll_rate: 1.0             # 查询频率 (Hz)
-    frame_id: "battery_link"   # TF 坐标系名称
-    timeout_ms: 200            # 串口读取超时时间
+    port_name: "/dev/ttyUSB0"    # Serial port device path
+    baud_rate: 115200            # Serial baud rate
+    publish_rate: 1.0            # Publishing frequency (Hz)
+    frame_id: "battery_link"     # TF frame ID
+    location: "base_link"        # Battery location
+    design_capacity: 2.6         # Rated capacity in Ah
+    timeout_ms: 200              # Read timeout
+    
+    # --- Diagnostic & Safety ---
+    over_temp_threshold: 55.0    # Secondary over-temp shutdown (Celsius)
+    low_soc_warn_threshold: 0.15 # Low battery warning (15%)
+    cell_gap_warn_threshold: 0.1 # Cell voltage gap warning threshold (0.1V = 100mV)

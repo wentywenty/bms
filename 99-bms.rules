@@ -1,0 +1,7 @@
+# TWS BMS UDEV Rule
+# 1. Run 'lsusb' to find your device IDs (e.g., ID 1a86:7523)
+# 2. Replace idVendor and idProduct below
+# 3. Copy this file to /etc/udev/rules.d/
+# 4. Run: sudo udevadm control --reload-rules && sudo udevadm trigger
+
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", SYMLINK+="bms", MODE="0666"

@@ -54,3 +54,4 @@ temp
 cmake-build-debug
 .idea
 log
+*.pdf
