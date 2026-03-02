@@ -11,6 +11,9 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
+
+# Required for pybind11 to find python headers correctly
+find_package(Python3 REQUIRED COMPONENTS Development)
 find_package(pybind11 REQUIRED)
 
 include_directories(include)

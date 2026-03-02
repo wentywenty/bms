@@ -2,7 +2,7 @@ bms_node:
   ros__parameters:
     port_name: "/dev/ttyUSB0"    # Serial port device path
     baud_rate: 115200            # Serial baud rate
-    publish_rate: 1.0            # Publishing frequency (Hz)
+    publish_rate: 0.2            # Publishing frequency (Hz)
     frame_id: "battery_link"     # TF frame ID
     location: "base_link"        # Battery location
     design_capacity: 2.6         # Rated capacity in Ah

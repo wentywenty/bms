@@ -4,12 +4,15 @@
 #include <unistd.h>
 #include <cstring>
 #include <iostream>
+#include <poll.h>
+#include <iomanip>
 
 namespace tws_bms {
 
 #define BMS_ADDR 0x01
 #define FUNC_READ 0x03
-#define FUNC_WRITE 0x06
+#define FUNC_WRITE_SINGLE 0x06
+#define FUNC_WRITE_MULTI 0x10
 #define REG_IO_CONTROL 0x9014
 #define REG_VERSION_SW 0x9026
 #define REG_VERSION_HW 0x9027
@@ -70,33 +73,22 @@ bool BmsProtocol::open() {
     if (serial_fd_ < 0) return false;
     struct termios options;
     tcgetattr(serial_fd_, &options);
-    speed_t baud;
-    switch(baud_rate_) {
-        case 9600: baud = B9600; break;
-        case 115200: baud = B115200; break;
-        default: baud = B115200; 
-    }
+    speed_t baud = (baud_rate_ == 9600) ? B9600 : B115200;
     cfsetispeed(&options, baud);
     cfsetospeed(&options, baud);
-    options.c_cflag &= ~PARENB;
-    options.c_cflag &= ~CSTOPB;
-    options.c_cflag &= ~CSIZE;
-    options.c_cflag |= CS8;
-    options.c_cflag |= (CLOCAL | CREAD);
+    options.c_cflag |= (CLOCAL | CREAD | CS8);
+    options.c_cflag &= ~(PARENB | CSTOPB | CSIZE);
     options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
     options.c_oflag &= ~OPOST;
     tcsetattr(serial_fd_, TCSANOW, &options);
-    fcntl(serial_fd_, F_SETFL, 0);
+    fcntl(serial_fd_, F_SETFL, FNDELAY);
     return true;
 }
 
-void BmsProtocol::close_port() {
-    if (serial_fd_ >= 0) { ::close(serial_fd_); serial_fd_ = -1; }
-}
+void BmsProtocol::close_port() { if (serial_fd_ >= 0) { ::close(serial_fd_); serial_fd_ = -1; } }
 
 uint16_t BmsProtocol::calculate_crc(const uint8_t *data, size_t len) {
-    uint8_t ucCRCHi = 0xFF;
-    uint8_t ucCRCLo = 0xFF;
+    uint8_t ucCRCHi = 0xFF, ucCRCLo = 0xFF;
     int iIndex;
     while(len--) {
         iIndex = ucCRCLo ^ *(data++);
@@ -107,59 +99,30 @@ uint16_t BmsProtocol::calculate_crc(const uint8_t *data, size_t len) {
 }
 
 void BmsProtocol::send_read_request(uint16_t start_addr, uint16_t num_regs) {
-    uint8_t frame[8];
-    frame[0] = BMS_ADDR;
-    frame[1] = FUNC_READ;
-    frame[2] = (start_addr >> 8) & 0xFF;
-    frame[3] = start_addr & 0xFF;
-    frame[4] = (num_regs >> 8) & 0xFF;
-    frame[5] = num_regs & 0xFF;
+    uint8_t frame[8] = {BMS_ADDR, FUNC_READ, (uint8_t)(start_addr >> 8), (uint8_t)start_addr, (uint8_t)(num_regs >> 8), (uint8_t)num_regs};
     uint16_t crc = calculate_crc(frame, 6);
-    frame[6] = crc & 0xFF; frame[7] = (crc >> 8) & 0xFF;
-    write(serial_fd_, frame, 8);
-}
-
-void BmsProtocol::send_write_request(uint16_t reg_addr, uint16_t value) {
-    uint8_t frame[8];
-    frame[0] = BMS_ADDR;
-    frame[1] = FUNC_WRITE;
-    frame[2] = (reg_addr >> 8) & 0xFF;
-    frame[3] = reg_addr & 0xFF;
-    frame[4] = (value >> 8) & 0xFF;
-    frame[5] = value & 0xFF;
-    uint16_t crc = calculate_crc(frame, 6);
-    frame[6] = crc & 0xFF; frame[7] = (crc >> 8) & 0xFF;
+    frame[6] = crc & 0xFF; frame[7] = crc >> 8;
     write(serial_fd_, frame, 8);
 }
 
 bool BmsProtocol::read_response(std::vector<uint8_t>& buffer, int expected_bytes) {
     if (serial_fd_ < 0) return false;
-    buffer.resize(expected_bytes);
+    buffer.assign(expected_bytes, 0);
     int total_read = 0;
-    int max_retries = 5;
-    while (total_read < expected_bytes && max_retries > 0) {
-        int n = read(serial_fd_, buffer.data() + total_read, expected_bytes - total_read);
-        if (n > 0) total_read += n;
-        else { usleep(10000); max_retries--; }
+    struct pollfd pfd = {serial_fd_, POLLIN, 0};
+    while (total_read < expected_bytes) {
+        int ret = poll(&pfd, 1, 150);
+        if (ret > 0) {
+            int n = read(serial_fd_, buffer.data() + total_read, expected_bytes - total_read);
+            if (n > 0) total_read += n; else break;
+        } else break;
     }
-    if (total_read != expected_bytes) return false;
-    uint16_t received_crc = buffer[expected_bytes-2] | (buffer[expected_bytes-1] << 8);
-    uint16_t calc_crc = calculate_crc(buffer.data(), expected_bytes - 2);
-    return (received_crc == calc_crc);
-}
-
-uint16_t BmsProtocol::get_u16(const std::vector<uint8_t>& buf, int offset) {
-    return buf[offset] | (buf[offset+1] << 8);
-}
-
-uint32_t BmsProtocol::get_u32(const std::vector<uint8_t>& buf, int offset) {
-    uint32_t low_word = get_u16(buf, offset);
-    uint32_t high_word = get_u16(buf, offset + 2);
-    return low_word | (high_word << 16);
-}
-
-int32_t BmsProtocol::get_i32(const std::vector<uint8_t>& buf, int offset) {
-    return static_cast<int32_t>(get_u32(buf, offset));
+    if (total_read < 5) return false;
+    uint16_t received_crc = buffer[total_read-2] | (buffer[total_read-1] << 8);
+    uint16_t calc_crc = calculate_crc(buffer.data(), total_read - 2);
+    if (received_crc != calc_crc) return false;
+    if (buffer[1] & 0x80) return false;
+    return (total_read == expected_bytes);
 }
 
 bool BmsProtocol::read_basic_info(BatteryStatus& status) {
@@ -186,12 +149,15 @@ bool BmsProtocol::read_version_info(BatteryStatus& status) {
     if (read_response(resp, 9)) {
         status.sw_version = get_u16(resp, 3);
         status.hw_version = get_u16(resp, 5);
-        usleep(50000); tcflush(serial_fd_, TCIOFLUSH);
+        
+        usleep(20000); tcflush(serial_fd_, TCIOFLUSH);
         send_read_request(REG_SOH, 1);
         if (read_response(resp, 7)) status.soh = get_u16(resp, 3);
-        usleep(50000); tcflush(serial_fd_, TCIOFLUSH);
+        
+        usleep(20000); tcflush(serial_fd_, TCIOFLUSH);
         send_read_request(REG_CYCLES, 2);
         if (read_response(resp, 9)) status.cycles = get_u32(resp, 3);
+        
         return true;
     }
     return false;
@@ -214,28 +180,29 @@ bool BmsProtocol::read_serial_number(std::string& sn) {
     send_read_request(0x9016, 16);
     std::vector<uint8_t> buf;
     if (read_response(buf, 37)) {
-        char sn_str[33];
-        for(int i=0; i<32; i++) sn_str[i] = buf[3+i];
-        sn_str[32] = '\0';
-        sn = std::string(sn_str);
-        return true;
+        char sn_str[33]; for(int i=0; i<32; i++) sn_str[i] = buf[3+i]; sn_str[32] = '\0';
+        sn = std::string(sn_str); return true;
     }
     return false;
 }
 
 bool BmsProtocol::set_discharge_output(bool enable) {
-    uint16_t ctrl_val = enable ? 0x0002 : 0x0000;
+    uint16_t val = enable ? 0x0003 : 0x0001;
     tcflush(serial_fd_, TCIOFLUSH);
-    send_write_request(REG_IO_CONTROL, ctrl_val);
+    uint8_t f6[8] = {BMS_ADDR, FUNC_WRITE_SINGLE, (uint8_t)(REG_IO_CONTROL >> 8), (uint8_t)REG_IO_CONTROL, (uint8_t)(val >> 8), (uint8_t)val};
+    uint16_t crc = calculate_crc(f6, 6); f6[6] = crc & 0xFF; f6[7] = crc >> 8;
+    write(serial_fd_, f6, 8);
     std::vector<uint8_t> resp;
-    if (!read_response(resp, 8)) return false;
+    if (read_response(resp, 8)) return true;
     usleep(50000); tcflush(serial_fd_, TCIOFLUSH);
-    send_read_request(REG_IO_CONTROL, 1);
-    if (read_response(resp, 7)) {
-        bool is_on = get_u16(resp, 3) & 0x0008;
-        return (is_on == enable);
-    }
-    return true;
+    uint8_t f10[13] = {BMS_ADDR, FUNC_WRITE_MULTI, (uint8_t)(REG_IO_CONTROL >> 8), (uint8_t)REG_IO_CONTROL, 0x00, 0x01, 0x02, (uint8_t)(val >> 8), (uint8_t)val};
+    crc = calculate_crc(f10, 9); f10[9] = crc & 0xFF; f10[10] = crc >> 8;
+    write(serial_fd_, f10, 11);
+    return read_response(resp, 8);
 }
+
+uint16_t BmsProtocol::get_u16(const std::vector<uint8_t>& buf, int offset) { return buf[offset] | (buf[offset+1] << 8); }
+uint32_t BmsProtocol::get_u32(const std::vector<uint8_t>& buf, int offset) { return get_u16(buf, offset) | (get_u16(buf, offset + 2) << 16); }
+int32_t BmsProtocol::get_i32(const std::vector<uint8_t>& buf, int offset) { return static_cast<int32_t>(get_u32(buf, offset)); }
 
 } // namespace tws_bms
