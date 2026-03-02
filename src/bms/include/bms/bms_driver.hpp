@@ -12,7 +12,8 @@ struct BatteryStatus {
     double current;
     double temperature;
     double percentage;
-    double capacity;
+    double charge;      
+    double capacity;    
     double design_capacity;
     uint32_t protect_status;
     uint16_t work_state;

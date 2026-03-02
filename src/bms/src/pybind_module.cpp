@@ -13,6 +13,7 @@ PYBIND11_MODULE(tws_bms_api, m) {
         .def_readwrite("current", &tws_bms::BatteryStatus::current)
         .def_readwrite("temperature", &tws_bms::BatteryStatus::temperature)
         .def_readwrite("percentage", &tws_bms::BatteryStatus::percentage)
+        .def_readwrite("charge", &tws_bms::BatteryStatus::charge)
         .def_readwrite("capacity", &tws_bms::BatteryStatus::capacity)
         .def_readwrite("design_capacity", &tws_bms::BatteryStatus::design_capacity)
         .def_readwrite("protect_status", &tws_bms::BatteryStatus::protect_status)

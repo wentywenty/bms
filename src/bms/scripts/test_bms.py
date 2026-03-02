@@ -1,69 +1,67 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-import tws_bms_api  # 导入 pybind11 生成的 C++ 模块
+import sys
+import os
 import time
+import glob
+
+def setup_path():
+    current_dir = os.path.abspath(os.path.dirname(__file__))
+    ws_root = current_dir
+    while ws_root != "/" and not os.path.exists(os.path.join(ws_root, "install")):
+        ws_root = os.path.dirname(ws_root)
+    if ws_root == "/": return None
+    search_pattern = os.path.join(ws_root, "install/bms/**/tws_bms_api*.so")
+    found_files = glob.glob(search_pattern, recursive=True)
+    if not found_files: return None
+    lib_dir = os.path.dirname(found_files[0])
+    if lib_dir not in sys.path: sys.path.insert(0, lib_dir)
+    return lib_dir
+
+lib_path = setup_path()
+try:
+    import tws_bms_api
+except ImportError as e:
+    print(f"\033[1;31m[错误] 导入失败: {e}\033[0m")
+    sys.exit(1)
 
 def main():
-    # 1. 初始化 BmsProtocol (串口路径, 波特率)
-    # 根据文档，UART 默认波特率为 115200 [cite: 132]
-    port_name = "/dev/ttyUSB0"
-    baud_rate = 115200
-    bms = tws_bms_api.BmsProtocol(port_name, baud_rate)
+    PORT = "/dev/ttyUSB0" 
+    BAUD = 115200
+    print(f"\033[1;32m=== TWS BMS Python API 测试工具 (库路径: {lib_path}) ===\033[0m")
+    bms = tws_bms_api.BmsProtocol(PORT, BAUD)
 
-    print(f"正在尝试打开串口 {port_name}...")
     if not bms.open():
-        print(f"错误: 无法打开串口 {port_name}！请检查权限或接线。")
+        print("\033[1;31m错误: 无法打开串口！\033[0m")
         return
 
-    print("串口打开成功！")
-
     try:
-        # 2. 获取序列号 (SN)
-        # 对应寄存器地址 9016，长度 32 字节 ASCII 
         sn = bms.read_serial_number()
-        if sn:
-            print(f"电池序列号: {sn}")
-        else:
-            print("警告: 无法读取序列号")
-
-        # 3. 创建状态结构体对象并循环读取
+        print(f"电池序列号: {sn}")
         status = tws_bms_api.BatteryStatus()
+        
+        if bms.read_version_info(status):
+            print(f"固件版本: 0x{status.sw_version:04X} | 硬件版本: 0x{status.hw_version:04X}")
+            print(f"健康度 (SOH): {status.soh}% | 循环次数: {status.cycles}")
 
-        for i in range(5):
-            print(f"\n--- 第 {i+1} 次采样 ---")
-            
-            # 读取基础信息 (寄存器 9000-9014) 
-            # 包含：工作状态、总电压、电流、极值电压、极值温度等
-            if bms.read_basic_info(status):
-                # 协议规定电压单位为 mV, 电流为 mA 
-                # 建议在 C++ 接口或此处进行单位转换
-                print(f"工作状态: {status.work_state}") # 0:IDLE, 1:CHG, 2:DSG 
+        count = 0
+        while True:
+            count += 1
+            if bms.read_basic_info(status) and bms.read_capacity_info(status):
+                print(f"\n--- 第 {count} 次采样 ---")
                 print(f"总电压  : {status.voltage:.2f} V")
                 print(f"总电流  : {status.current:.2f} A")
-                
-                # 温度换算逻辑：实际值 = 寄存器值 - 40 
                 print(f"最高温度: {status.temperature:.1f} °C")
-                print(f"单体电压: Max {status.max_cell_voltage:.3f}V / Min {status.min_cell_voltage:.3f}V")
-
-                # 读取容量与健康度 (寄存器 9028-902A) 
-                if bms.read_capacity_info(status):
-                    # 文档定义 BasSoc 单位为 1% 
-                    print(f"电量(SOC): {status.percentage:.1f} %")
-                    print(f"健康(SOH): {status.soh:.1f} %")
+                print(f"当前电量: {status.percentage * 100:.1f} %")
+                print(f"容量统计: 剩余 {status.charge:.2f} Ah / 当前满充 {status.capacity:.2f} Ah")
+                print(f"电芯极值: Max {status.max_cell_voltage:.3f}V / Min {status.min_cell_voltage:.3f}V (极差: {status.max_cell_voltage - status.min_cell_voltage:.3f}V)")
             else:
-                print("读取失败：未收到回复或 CRC 校验错误")
-
-            time.sleep(1)
-
+                print("\033[1;33m数据读取失败，跳过...\033[0m")
+            time.sleep(1.0)
     except KeyboardInterrupt:
-        print("\n用户终止测试")
-    except Exception as e:
-        print(f"运行异常: {e}")
+        pass
     finally:
-        # 4. 关闭串口
         bms.close_port()
-        print("测试完成，串口已关闭")
+        print("\n\033[1;32m测试完成，串口已关闭\033[0m")
 
 if __name__ == "__main__":
     main()

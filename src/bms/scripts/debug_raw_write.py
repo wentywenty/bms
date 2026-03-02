@@ -23,7 +23,7 @@ def send(name, raw_hex):
     print(f"发送: {full_data.hex(' ')}")
     
     try:
-        with serial.Serial(PORT, BAUD, timeout=0.3) as ser: # 缩短超时加快探测
+        with serial.Serial(PORT, BAUD, timeout=0.3) as ser: 
             ser.write(full_data)
             resp = ser.read(100)
             if resp:

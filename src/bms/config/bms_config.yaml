@@ -5,7 +5,7 @@ bms_node:
     publish_rate: 0.2            # Publishing frequency (Hz)
     frame_id: "battery_link"     # TF frame ID
     location: "base_link"        # Battery location
-    design_capacity: 2.6         # Rated capacity in Ah
+    design_capacity: 6.0         # Rated capacity in Ah
     timeout_ms: 200              # Read timeout
     
     # --- Diagnostic & Safety ---

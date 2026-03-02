@@ -165,11 +165,15 @@ bool BmsProtocol::read_version_info(BatteryStatus& status) {
 
 bool BmsProtocol::read_capacity_info(BatteryStatus& status) {
     tcflush(serial_fd_, TCIOFLUSH);
-    send_read_request(0x9028, 4);
+    send_read_request(0x9028, 4); // SOC, SOH, RemainCapcity
     std::vector<uint8_t> buf;
     if (read_response(buf, 13)) {
          status.percentage = get_u16(buf, 3) / 100.0;
-         status.capacity = get_u32(buf, 7) / 1000.0;
+         status.soh = get_u16(buf, 5);
+         status.charge = get_u32(buf, 7) / 1000.0; // Remaining Capacity in Ah
+         // For TWS, we'll use Remaining Capacity as capacity if Full Capacity isn't available, 
+         // or it will be overwritten by design_capacity later.
+         status.capacity = status.charge / (status.percentage > 0 ? status.percentage : 1.0);
          return true;
     }
     return false;
